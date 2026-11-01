@@ -4,7 +4,7 @@ English | [中文](README.zh-CN.md)
 
 **Version 0.1.1**
 
-A small floating macOS app for a specific situation: **an earphone or BLE accessory is missing, Find My has no location or cannot connect, but the accessory may still be advertising.** Use fresh RSSI observations to help narrow a physical search. It is not limited to AirPods and does not require an audio connection.
+A small floating macOS app for a specific situation: **an earphone or BLE accessory is missing, Find My has no location or cannot connect, but the accessory may still be advertising.** Use fresh RSSI observations to help narrow a physical search. It is not limited to a specific earphone model and does not require an audio connection.
 
 > **A displayed battery percentage does not prove proximity.** It may be cached. Only new advertisements/system updates provide current signal clues. This app does not replace Find My, provide GPS or directional finding, force a sound, or guarantee an accurate distance.
 
@@ -29,8 +29,7 @@ A user-provided runtime capture (cropped, before the tracking-target header was 
 | Device/state | Support |
 | --- | --- |
 | BLE earphones, tags, keyboards, sensors, etc. currently advertising and exposed by macOS CoreBluetooth | Select a scan identifier and try tracking it; **not per-model certification** |
-| AirPods | Fresh advertisements and system events observed on one Mac during an actual search; not guaranteed across firmware/macOS versions |
-| Other AirPods, Beats or other earphones | Only if their BLE advertisements are actually visible; not individually verified |
+| Certain Apple/Beats earphones (models intentionally not listed) | Fresh advertisements and system events have been observed on one Mac during an actual search for some models; not guaranteed across firmware/macOS versions, and models are not individually verified |
 | Classic-Bluetooth-only, powered-off, dead or non-advertising devices | Cannot be located with this tool |
 | Cached battery/connection records only | Not evidence of current proximity |
 
