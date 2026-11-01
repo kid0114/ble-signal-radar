@@ -4,7 +4,7 @@ English | [中文](README.zh-CN.md)
 
 **Version 0.1.1**
 
-A small floating macOS app for a specific situation: **an earphone or BLE accessory is missing, Find My has no location or cannot connect, but the accessory may still be advertising.** Use fresh RSSI observations to help narrow a physical search. It is not limited to a specific earphone model and does not require an audio connection.
+When you can't find your headphones, move your Mac around and watch the signal: it helps you tell roughly where the device is and narrow down the search area.
 
 > **A displayed battery percentage does not prove proximity.** It may be cached. Only new advertisements/system updates provide current signal clues. This app does not replace Find My, provide GPS or directional finding, force a sound, or guarantee an accurate distance.
 
