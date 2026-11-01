@@ -1,61 +1,9 @@
 import Cocoa
-import CoreBluetooth
 
-func signalColor(_ rssi: Int) -> NSColor {
-    if rssi < -85 { return .systemRed }
-    if rssi < -70 { return .systemOrange }
-    if rssi < -55 { return .systemYellow }
-    return .systemGreen
-}
-
-final class GraphView: NSView {
-    var samples: [SignalSample] = []
-    var language = AppLanguage.chinese
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedWhite: 0.10, alpha: 1).setFill()
-        bounds.fill()
-        let plot = bounds.insetBy(dx: 38, dy: 20)
-        let now = Date(), start = Date().addingTimeInterval(-60)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: NSColor.lightGray
-        ]
-        for value in [-100, -70, -40] {
-            let y = plot.minY + CGFloat(value + 105) / 70 * plot.height
-            NSColor.darkGray.setStroke()
-            let line = NSBezierPath()
-            line.move(to: NSPoint(x: plot.minX, y: y))
-            line.line(to: NSPoint(x: plot.maxX, y: y))
-            line.stroke()
-            ("\(value)" as NSString).draw(at: NSPoint(x: 5, y: y - 6), withAttributes: attributes)
-        }
-        let left = language == .chinese ? "60 秒前" : "60 s ago"
-        let right = language == .chinese ? "现在" : "Now"
-        (left as NSString).draw(at: NSPoint(x: plot.minX, y: 2), withAttributes: attributes)
-        (right as NSString).draw(at: NSPoint(x: plot.maxX - 25, y: 2), withAttributes: attributes)
-        var previous: (Date, NSPoint)?
-        for sample in samples where sample.date >= start && sample.date <= now {
-            let x = plot.minX + CGFloat(sample.date.timeIntervalSince(start) / 60) * plot.width
-            let y = plot.minY + CGFloat(max(-105, min(-35, sample.rssi)) + 105) / 70 * plot.height
-            let point = NSPoint(x: x, y: y)
-            signalColor(sample.rssi).setStroke()
-            signalColor(sample.rssi).setFill()
-            if let (date, oldPoint) = previous, sample.date.timeIntervalSince(date) <= 3 {
-                let line = NSBezierPath()
-                line.lineWidth = 2
-                line.move(to: oldPoint)
-                line.line(to: point)
-                line.stroke()
-            }
-            NSBezierPath(ovalIn: NSRect(x: x - 3, y: y - 3, width: 6, height: 6)).fill()
-            previous = (sample.date, point)
-        }
-    }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelegate {
+final class SignalWindowController: NSObject {
     var window: NSWindow!
-    var central: CBCentralManager!
+    private let sessionID = UUID()
+    private lazy var scanner = BLEScanner(sessionID: sessionID)
     var timer: Timer?
     var configuration = MeterConfiguration()
     var configurationError: Error?
@@ -66,9 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         return Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("config.local.json")
     }
     var history = SignalHistory()
-    var nearby: [UUID: NearbyPeripheral] = [:]
     var devicePicker: DevicePicker?
     let chooseDeviceButton = NSButton()
+    let targetLabel = NSTextField(labelWithString: "")
     let graph = GraphView()
     let bigLabel = NSTextField(labelWithString: "--")
     let bigDistanceLabel = NSTextField(labelWithString: "--")
@@ -94,15 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     let applyButton = NSButton()
     let calibrateButton = NSButton()
     let rescanButton = NSButton()
-    var callbacks = 0
-    var peripherals = Set<UUID>()
     var coreMatches = 0
     var systemMatches = 0
-    var logProcess: Process?
-    var logPipe: Pipe?
-    var logBuffer = Data()
-    var logFailure: String?
-    var quitting = false
+    private var logBackend: AirPodsLogBackend?
+    private var logFailure: String? { logBackend?.failure }
     let clock: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -113,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         configuration.language == .chinese ? chinese : english
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func show() {
         do { configuration = try MeterConfiguration.load(from: configurationURL) }
         catch { configurationError = error }
         let menu = NSMenu(), item = NSMenuItem(), submenu = NSMenu()
@@ -122,7 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         item.submenu = submenu
         NSApp.mainMenu = menu
         let addedBottomPadding: CGFloat = 12
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 674 + addedBottomPadding),
+        let targetHeaderHeight: CGFloat = 32
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 674 + addedBottomPadding + targetHeaderHeight),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.level = .floating
@@ -203,21 +147,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         for view in content.subviews {
             view.setFrameOrigin(NSPoint(x: view.frame.minX, y: view.frame.minY + addedBottomPadding))
         }
+        // Add a header above the existing controls, preserving their spacing and footer margin.
+        targetLabel.frame = NSRect(x: 16, y: content.bounds.height - 30, width: 728, height: 20)
+        targetLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        targetLabel.alignment = .left
+        targetLabel.lineBreakMode = .byTruncatingMiddle
+        targetLabel.isSelectable = true
+        content.addSubview(targetLabel)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        central = CBCentralManager(delegate: self, queue: nil)
+        scanner.onObservation = { [weak self] in self?.receive($0) }
+        scanner.onStatusChanged = { [weak self] in self?.render() }
+        scanner.start()
         startLogStream()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.render() }
         render()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) {
-        quitting = true
+    func stop() {
         timer?.invalidate()
-        central?.stopScan()
-        logPipe?.fileHandleForReading.readabilityHandler = nil
-        if logProcess?.isRunning == true { logProcess?.terminate() }
+        timer = nil
+        scanner.stop()
+        logBackend?.stop()
+        logBackend = nil
     }
 
     func showError(_ error: Error) {
@@ -277,7 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     @objc func chooseDevice() {
         devicePicker = DevicePicker(parent: window, language: configuration.language,
             showDistances: configuration.showDiscoveryDistances,
-            provider: { [weak self] in self.map { Array($0.nearby.values) } ?? [] },
+            provider: { [weak self] in self.map { Array($0.scanner.nearby.values) } ?? [] },
             onDistanceOptionChanged: { [weak self] enabled in self?.setDiscoveryDistances(enabled) ?? false },
             onChoose: { [weak self] identifier in self?.setTarget(identifier) })
     }
@@ -309,107 +261,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             systemMatches = 0
             referenceField.stringValue = "-59.0"
             exponentField.stringValue = "2.5"
-            let oldProcess = logProcess
-            logProcess = nil
-            logPipe?.fileHandleForReading.readabilityHandler = nil
-            if oldProcess?.isRunning == true { oldProcess?.terminate() }
-            logFailure = nil
+            logBackend?.stop()
+            logBackend = nil
             if identifier == nil { startLogStream() }
         } catch { showError(error) }
         render()
     }
 
     @objc func rescan() {
-        if central.state == .poweredOn {
-            central.stopScan()
-            central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
-        }
-        if logProcess?.isRunning != true { startLogStream() }
+        scanner.rescan()
+        if logBackend?.isRunning != true { startLogStream() }
         render()
     }
 
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOn {
-            central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
-        }
-        render()
-    }
-
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
-                        advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        callbacks += 1
-        peripherals.insert(peripheral.identifier)
-        guard validRSSI(RSSI.intValue) else { return }
-        let data = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
-        let bytes = data.map(Array.init) ?? []
-        let company = bytes.count >= 2 ? String(format: "0x%04X", Int(bytes[0]) | (Int(bytes[1]) << 8)) : nil
-        nearby[peripheral.identifier] = NearbyPeripheral(identifier: peripheral.identifier,
-            name: advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name,
-            rssi: RSSI.intValue, lastSeen: Date(), manufacturer: company)
-        // Keep a bounded, recent candidate list. Counts above remain explicitly cumulative.
-        if nearby.count > 512 {
-            let recent = nearby.values.sorted { $0.lastSeen > $1.lastSeen }.prefix(512)
-            nearby = Dictionary(uniqueKeysWithValues: recent.map { ($0.identifier, $0) })
-        }
+    private func receive(_ observation: Observation<BLEAdvertisement>) {
+        let advertisement = observation.payload
         let source: SignalSource
         if let id = configuration.peripheralIdentifier {
-            guard peripheral.identifier.uuidString == id.uppercased() else { return }
+            guard advertisement.identifier.uuidString == id.uppercased() else { return }
             source = .selectedPeripheral
         } else {
-            guard let data, matchesHistoricalPayload(data, prefix: configuration.payloadBytes) else { return }
+            guard let data = advertisement.manufacturerData,
+                  matchesHistoricalPayload(data, prefix: configuration.payloadBytes) else { return }
             source = .historicalPayload
         }
         coreMatches += 1
-        history.append(SignalSample(date: Date(), rssi: RSSI.intValue, source: source))
+        history.append(SignalSample(date: observation.context.observedAt,
+                                    rssi: advertisement.rssi, source: source))
     }
 
-    func startLogStream() {
+    private func startLogStream() {
         guard configuration.peripheralIdentifier == nil, let identifier = configuration.caseIdentifier else { return }
-        let process = Process(), pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
-        process.arguments = ["stream", "--style", "ndjson", "--level", "info", "--predicate",
-            "process == \"bluetoothd\" AND eventMessage BEGINSWITH \"Accessory found: CBAccessoryInfo: ID \(identifier.uppercased()),\""]
-        process.standardOutput = pipe
-        process.standardError = pipe
-        logBuffer.removeAll()
-        logFailure = nil
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if data.isEmpty { handle.readabilityHandler = nil; return }
-            DispatchQueue.main.async { self?.consumeLogData(data) }
+        if let backend = logBackend { backend.start(); return }
+        let backend = AirPodsLogBackend(identifier: identifier, sessionID: sessionID,
+                                       startedAt: history.startedAt)
+        backend.onObservation = { [weak self] observation in
+            guard let self else { return }
+            self.history.append(SignalSample(date: observation.context.observedAt,
+                rssi: observation.payload.rssi, source: .systemIdentifier))
+            self.systemMatches += 1
         }
-        process.terminationHandler = { [weak self] process in
-            let code = process.terminationStatus
-            DispatchQueue.main.async {
-                guard let self, !self.quitting, self.logProcess === process else { return }
-                self.logFailure = "exit \(code)"
-                self.render()
-            }
-        }
-        logProcess = process
-        logPipe = pipe
-        do { try process.run() }
-        catch { logFailure = error.localizedDescription; pipe.fileHandleForReading.readabilityHandler = nil }
+        backend.onStatusChanged = { [weak self] in self?.render() }
+        logBackend = backend
+        backend.start()
     }
 
-    func consumeLogData(_ data: Data) {
-        logBuffer.append(data)
-        while let end = logBuffer.firstIndex(of: 10) {
-            let line = Data(logBuffer[..<end])
-            logBuffer.removeSubrange(...end)
-            if configuration.peripheralIdentifier == nil, let id = configuration.caseIdentifier,
-               let event = parseTargetEvent(line, caseID: id.uppercased()), history.accept(event) {
-                systemMatches += 1
-            } else if let text = String(data: line, encoding: .utf8), text.hasPrefix("log:") {
-                logFailure = String(text.prefix(100))
-            }
-        }
-        if logBuffer.count > 1_048_576 { logBuffer.removeAll() }
-    }
-
-    func bluetoothStatus() -> String {
-        guard let central else { return t("等待初始化", "Initialising") }
-        switch central.state {
+    private func bluetoothStatus() -> String {
+        switch scanner.state {
         case .poweredOn: return t("正在扫描", "Scanning")
         case .poweredOff: return t("已关闭，请打开蓝牙", "Off; turn Bluetooth on")
         case .unauthorized: return t("无权限，请到隐私设置允许蓝牙", "Not authorised; allow Bluetooth in Privacy settings")
@@ -423,6 +321,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         let now = Date(), values = history.recentRSSI(at: Date())
         let parameters = configuration.distance
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let targetText = trackingTargetText(configuration: configuration, nearby: scanner.nearby)
+        if targetLabel.stringValue != targetText { targetLabel.stringValue = targetText }
+        targetLabel.setAccessibilityLabel(t("当前选择的追踪目标", "Selected tracking target"))
+        targetLabel.toolTip = targetText + t("\n名称来自发现记录；选择标识不代表当前在场或身份认证。", "\nName comes from discovery records; selection is not proof of current presence or ownership.")
         window?.title = t("BLE 信号雷达 v\(version) · 0.5 秒刷新", "BLE Signal Radar v\(version) · 0.5 s UI refresh")
         if let item = NSApp.mainMenu?.items.first?.submenu?.items.first { item.title = t("退出信号雷达", "Quit Signal Radar") }
         if let sample = history.latest {
@@ -466,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         }
         parameterLabel.stringValue = t("参考：1米 \(String(format: "%.1f", parameters.referenceRSSI)) dBm，n=\(parameters.pathLossExponent)；近期 \(values.count) 条同源样本取中位数", "Reference: \(String(format: "%.1f", parameters.referenceRSSI)) dBm at 1 m, n=\(parameters.pathLossExponent); median of \(values.count) recent same-source samples")
         warningLabel.stringValue = t("墙、柜子、人体和朝向都可能使估算严重失真；这不是实际测距或精确定位。", "Walls, cabinets, bodies and orientation can cause large errors. This is NOT measured distance or precision finding.")
-        scanLabel.stringValue = t("蓝牙：\(bluetoothStatus()) ｜ 回调 \(callbacks) 次 / 累计 \(peripherals.count) 个 BLE 标识", "Bluetooth: \(bluetoothStatus()) | \(callbacks) callbacks / \(peripherals.count) cumulative BLE identifiers")
+        scanLabel.stringValue = t("蓝牙：\(bluetoothStatus()) ｜ 回调 \(scanner.callbacks) 次 / 累计 \(scanner.identifierCount) 个 BLE 标识", "Bluetooth: \(bluetoothStatus()) | \(scanner.callbacks) callbacks / \(scanner.identifierCount) cumulative BLE identifiers")
         if let error = configurationError { logLabel.stringValue = t("配置读取失败：", "Configuration error: ") + ((error as? ConfigurationError)?.message(in: configuration.language) ?? error.localizedDescription) }
         else if let error = logFailure { logLabel.stringValue = t("系统事件异常：", "System event error: ") + error }
         else if configuration.peripheralIdentifier != nil { logLabel.stringValue = t("系统事件：通用 BLE 模式下不使用 AirPods 日志", "System events: AirPods log channel is off in generic BLE mode") }
@@ -494,17 +396,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         graph.samples = history.samples
         graph.needsDisplay = true
         if devicePicker?.panel.isVisible == true { devicePicker?.refresh() }
-    }
-}
-
-@main
-struct SignalRadar {
-    static func main() {
-        let app = NSApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
-        app.setActivationPolicy(.regular)
-        app.run()
-        withExtendedLifetime(delegate) {}
     }
 }

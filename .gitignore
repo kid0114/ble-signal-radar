@@ -4,3 +4,5 @@
 *.local.json
 logs/
 .build/
+/recordings/
+/exports/

@@ -61,18 +61,24 @@ struct Tests {
         check(parse(try record(message.replacingOccurrences(of: "RSSI -61", with: "RSSI 127"))) == nil, "invalid log RSSI ignored")
         check(parse(try record(message, time: "invalid")) == nil, "invalid time rejected")
         let history = SignalHistory(startedAt: event.date.addingTimeInterval(-1))
-        check(history.accept(event, now: event.date), "new event accepted")
-        check(!history.accept(event, now: event.date.addingTimeInterval(1)), "repeated AdTsMC ignored")
+        let filter = AirPodsEventFilter(startedAt: history.startedAt)
+        func accept(_ event: TargetEvent, now: Date) -> Bool {
+            guard filter.accepts(event, now: now) else { return false }
+            history.append(SignalSample(date: event.date, rssi: event.rssi, source: .systemIdentifier))
+            return true
+        }
+        check(accept(event, now: event.date), "new event accepted")
+        check(!accept(event, now: event.date.addingTimeInterval(1)), "repeated AdTsMC ignored")
         check(history.isFresh(at: event.date.addingTimeInterval(4)), "fresh window")
         check(!history.isFresh(at: event.date.addingTimeInterval(6)), "sample goes stale without new data")
         check(history.recentRSSI(at: event.date.addingTimeInterval(6)).isEmpty, "stale sample cannot drive distance estimates")
         check(history.samples.count == 1, "UI ticks do not fabricate samples")
-        let newHistory = SignalHistory(startedAt: event.date.addingTimeInterval(10))
-        check(!newHistory.accept(event, now: event.date.addingTimeInterval(20)), "historical replay rejected")
+        let laterFilter = AirPodsEventFilter(startedAt: event.date.addingTimeInterval(10))
+        check(!laterFilter.accepts(event, now: event.date.addingTimeInterval(20)), "historical replay rejected")
         let next = TargetEvent(date: event.date.addingTimeInterval(2), rssi: -70, advertisementStamp: "123456790")
-        check(history.accept(next, now: next.date), "changed advertisement timestamp accepted")
+        check(accept(next, now: next.date), "changed advertisement timestamp accepted")
         let delayed = TargetEvent(date: event.date.addingTimeInterval(1), rssi: -65, advertisementStamp: "123456791")
-        check(history.accept(delayed, now: next.date), "delayed target event accepted alongside newer callback")
+        check(accept(delayed, now: next.date), "delayed target event accepted alongside newer callback")
         check(history.latest?.rssi == -70, "delayed event cannot overwrite latest genuine value")
         history.append(SignalSample(date: next.date.addingTimeInterval(1), rssi: -50, source: .historicalPayload))
         check(history.recentRSSI(at: next.date.addingTimeInterval(1)) == [-50], "different sources not mixed in median")
@@ -148,6 +154,8 @@ struct Tests {
         check(genericHistory.recentRSSI(at: event.date.addingTimeInterval(1)) == [-57], "generic source feeds distance median")
         genericHistory.append(SignalSample(date: event.date.addingTimeInterval(1), rssi: -90, source: .systemIdentifier))
         check(genericHistory.recentRSSI(at: event.date.addingTimeInterval(1)) == [-90], "generic and accessory sources never mixed")
+        try checkBackendFoundation(check)
+        checkTrackingTarget(check)
         print("PASS: \(count) checks")
     }
 }

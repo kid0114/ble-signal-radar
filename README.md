@@ -12,11 +12,12 @@ A small floating macOS app for a specific situation: **an earphone or BLE access
 
 ![English runtime screenshot showing side-by-side RSSI and estimated-distance columns](docs/screenshot-en.png)
 
-An actual local run, not simulated data. The large columns show RSSI and model distance side by side; `--` means no fresh target sample is available. The separate last-sample model reference is explicitly historical when stale. See also [the cropped Chinese runtime detail](README.zh-CN.md#运行截图). Neither readout is a verified physical distance.
+A user-provided runtime capture (cropped, before the tracking-target header was added), not simulated data. The large columns show RSSI and model distance side by side; `--` means no fresh target sample is available. The separate last-sample model reference is explicitly historical when stale. See also [the cropped Chinese runtime detail](README.zh-CN.md#运行截图). Neither readout is a verified physical distance.
 
 ## Features
 
 - **Generic BLE target picker:** recent advertised names, scan identifiers, RSSI, sample age and company IDs. Enable or hide the **Model m (uncal.)** column for all scanned devices; this option is saved locally. Select any fresh BLE identifier to track—it does not have to be an AirPods device.
+- **Selected target at the top:** device name when available and full BLE identifier, selectable/copyable with a full-text tooltip. The selected identity remains visible without fresh samples; after restart the identifier appears immediately and the name returns when discovered. Selection does not prove current presence or ownership.
 - **Live Chinese / English switching** with locally saved preference.
 - **Freshness and provenance:** large dBm reading, source, last update and 60-second chart. Clear current RSSI and distance after 5 seconds without updates. A separate last-sample model reference remains visible with its age and an explicit historical/not-current label.
 - **Side-by-side signal and distance:** large RSSI (dBm) and estimated-distance (m) columns. The distance model uses recent same-source median RSSI, an adjustable 1 m reference and path-loss exponent, plus user-confirmed 1 m reference calibration. Both current readouts show `--` when no fresh target sample is available.
@@ -114,12 +115,16 @@ Settings live in `config.local.json` beside the `.app`. When launching the execu
 
 ## Verification and source
 
-`./test.sh` covers TLV parsing, target rejection, deduplication/order/freshness, distance mathematics, configuration and bilingual validation messages. Tests do not inject fake radio data into the GUI. Formula correctness does not establish physical ranging accuracy. Screenshots come from real runs; target-picker UI, English validation alerts and stale display were checked locally.
+`./test.sh` covers TLV parsing, target rejection, deduplication/order/freshness, distance mathematics, configuration, bilingual validation/target labels, observation metadata and chunked log framing. Tests do not inject fake radio data into the GUI. Formula correctness does not establish physical ranging accuracy. Screenshots come from real runs; target-picker UI, English validation alerts and stale display were checked locally.
 
-- `SignalRadar.swift`: floating GUI, scanning and log subprocess.
-- `DevicePicker.swift`: generic BLE target selection.
-- `Configuration.swift`: local settings, language and distance model.
-- `SignalModel.swift`: parsing, sample history and median.
-- `Tests.swift`, `test.sh`: tests.
-- `build.sh`, `Info.plist`, `localizations/`: packaging and Bluetooth permission descriptions.
-- `docs/`: actual runtime screenshots.
+- `Sources/App/`: application lifecycle and backward-compatible local settings.
+- `Sources/Core/`: platform-independent observation metadata, typed payload envelope and backend contract.
+- `Sources/Backends/BLE/`: CoreBluetooth collection and generic discovery models.
+- `Sources/Backends/AirPods/`: optional Apple payload/log parsing, deduplication and owned log subprocess.
+- `Sources/Analysis/`: existing BLE-oriented RSSI history, median and distance model.
+- `Sources/UI/`: window controller, generic target picker and graph; layout is unchanged.
+- `Tests/`, `test.sh`: offline regressions; the shared core also compiles independently.
+- `build.sh`, `Resources/`: app packaging and localized Bluetooth permission descriptions.
+- `docs/`: actual runtime screenshots and the [architecture / staged expansion plan](docs/architecture.md).
+
+The structural foundation uses typed observations from both existing collectors. It does **not** implement SDR reception, recording/replay, remote collection, spectrum detection, mapping or localization. Those remain separately scoped stages. Root `recordings/` and `exports/` are ignored as a privacy precaution, not evidence that recording exists.
