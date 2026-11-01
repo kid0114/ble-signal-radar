@@ -2,7 +2,7 @@
 
 English | [中文](README.zh-CN.md)
 
-**Version 1.0**
+**Version 0.1.1**
 
 A small floating macOS app for a specific situation: **an earphone or BLE accessory is missing, Find My has no location or cannot connect, but the accessory may still be advertising.** Use fresh RSSI observations to help narrow a physical search. It is not limited to AirPods and does not require an audio connection.
 
