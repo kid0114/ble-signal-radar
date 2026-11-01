@@ -1,0 +1,11 @@
+{
+  "caseIdentifier": "11111111-2222-3333-4444-555555555555",
+  "accessoryPayloadPrefix": "06 15 20 aa bb cc dd ee ff",
+  "language": "en",
+  "showDiscoveryDistances": true,
+  "distance": {
+    "referenceRSSI": -59,
+    "pathLossExponent": 2.5,
+    "referenceCalibrated": false
+  }
+}

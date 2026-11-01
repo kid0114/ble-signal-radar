@@ -1,0 +1,2 @@
+"NSBluetoothAlwaysUsageDescription" = "扫描附近 BLE 广播并显示信号强弱，辅助寻找你的配件。";
+"NSBluetoothPeripheralUsageDescription" = "扫描附近 BLE 广播，显示信号强弱。";

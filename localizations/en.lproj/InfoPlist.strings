@@ -1,0 +1,2 @@
+"NSBluetoothAlwaysUsageDescription" = "Scan nearby BLE advertisements and show signal strength to help search for your accessory.";
+"NSBluetoothPeripheralUsageDescription" = "Scan nearby BLE advertisements to display signal strength.";

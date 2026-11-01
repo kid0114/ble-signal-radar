@@ -1,0 +1,6 @@
+.DS_Store
+*.app/
+*.dSYM/
+*.local.json
+logs/
+.build/
